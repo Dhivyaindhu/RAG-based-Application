@@ -18,9 +18,10 @@ from dotenv import load_dotenv
 
 load_dotenv()  # loads .env locally; no effect when platform injects env vars
 
-from app.parser import extract_text
-from app.rag import index_document, retrieve_chunks, doc_id_from_filename, list_documents
-from app.llm import generate_answer
+# ── Fixed imports (no app/ folder — all files are at root) ───────────────────
+from doc_parser import extract_text
+from rag import index_document, retrieve_chunks, doc_id_from_filename, list_documents
+from llm import generate_answer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -168,7 +169,7 @@ async def query_document(body: QueryRequest):
     retrieval_query = (
         body.question
         if body.mode == "qa"
-        else f"Main topics, key points, and important details of the document"
+        else "Main topics, key points, and important details of the document"
     )
 
     try:
