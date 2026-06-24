@@ -2,12 +2,13 @@
 RAG pipeline — chunk text, embed, store in ChromaDB, retrieve relevant chunks.
 
 Strategy used: Parent-Child RAG
-- Small chunks (200 tokens) are embedded and searched for precision.
-- Parent chunks (600 tokens) are returned to the LLM for richer context.
+- Small chunks (200 words) embedded and searched for precision.
+- Parent chunks (600 words) returned to LLM for richer context.
 
-ChromaDB version: 0.6.x (uses PersistentClient)
+ChromaDB 0.6.x — uses PersistentClient(path=...)
 """
 
+import os
 import uuid
 import hashlib
 from typing import List, Dict
@@ -15,9 +16,16 @@ from typing import List, Dict
 import chromadb
 from sentence_transformers import SentenceTransformer
 
-# ── Embedding model (runs locally, no API key needed) ───────────────────────
-_EMBED_MODEL_NAME = "all-MiniLM-L6-v2"  # 80MB, fast, good quality
+# ── Constants ─────────────────────────────────────────────────────────────────
+_EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
+
+# Render mounts the persistent disk at this path (set via env var in render.yaml)
+# Falls back to ./vectorstore for local development
+VECTORSTORE_PATH = os.getenv("VECTORSTORE_PATH", "./vectorstore")
+
+# ── Singletons ────────────────────────────────────────────────────────────────
 _embed_model = None
+_chroma_client = None
 
 
 def get_embed_model() -> SentenceTransformer:
@@ -27,28 +35,19 @@ def get_embed_model() -> SentenceTransformer:
     return _embed_model
 
 
-# ── ChromaDB client — 0.6.x API ──────────────────────────────────────────────
-_chroma_client = None
-
-
 def get_chroma_client():
     global _chroma_client
     if _chroma_client is None:
-        _chroma_client = chromadb.PersistentClient(path="./vectorstore")
+        os.makedirs(VECTORSTORE_PATH, exist_ok=True)
+        _chroma_client = chromadb.PersistentClient(path=VECTORSTORE_PATH)
     return _chroma_client
 
 
-# ── Chunking ─────────────────────────────────────────────────────────────────
+# ── Chunking ──────────────────────────────────────────────────────────────────
 
 def chunk_text(text: str, chunk_size: int = 200, overlap: int = 40) -> List[str]:
-    """
-    Split text into word-based chunks with overlap.
-    chunk_size: words per small (child) chunk — used for embedding/search.
-    overlap: words shared between consecutive chunks to preserve context.
-    """
     words = text.split()
-    chunks = []
-    start = 0
+    chunks, start = [], 0
     while start < len(words):
         end = min(start + chunk_size, len(words))
         chunks.append(" ".join(words[start:end]))
@@ -59,32 +58,23 @@ def chunk_text(text: str, chunk_size: int = 200, overlap: int = 40) -> List[str]
 
 
 def chunk_text_large(text: str, chunk_size: int = 600, overlap: int = 80) -> List[str]:
-    """Larger (parent) chunks — sent to LLM for answer generation."""
     return chunk_text(text, chunk_size=chunk_size, overlap=overlap)
 
 
-# ── Indexing ──────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def doc_id_from_filename(filename: str) -> str:
-    """Stable collection name derived from filename (ChromaDB safe)."""
     safe = hashlib.md5(filename.encode()).hexdigest()[:16]
     return f"doc_{safe}"
 
 
-def index_document(text: str, filename: str) -> Dict:
-    """
-    Chunk, embed, and store a document in ChromaDB.
-    Returns metadata: doc_id, child_chunks, parent_chunks.
+# ── Indexing ──────────────────────────────────────────────────────────────────
 
-    Parent-Child strategy:
-    - child_chunks: small, precise → embedded and stored in Chroma
-    - parent_chunks: large, contextual → stored as metadata alongside child
-    """
+def index_document(text: str, filename: str) -> Dict:
     doc_id = doc_id_from_filename(filename)
     client = get_chroma_client()
     model = get_embed_model()
 
-    # Delete existing collection for this doc (re-upload = re-index)
     try:
         client.delete_collection(doc_id)
     except Exception:
@@ -98,39 +88,34 @@ def index_document(text: str, filename: str) -> Dict:
     child_chunks = chunk_text(text)
     parent_chunks = chunk_text_large(text)
 
-    # Map each child chunk to its nearest parent chunk index
-    child_to_parent: List[int] = []
     child_words_seen = 0
-    for i, child in enumerate(child_chunks):
-        child_word_count = len(child.split())
+    child_to_parent: List[int] = []
+    total_words = max(len(text.split()), 1)
+
+    for child in child_chunks:
         parent_idx = min(
-            int(child_words_seen / max(len(text.split()), 1) * len(parent_chunks)),
+            int(child_words_seen / total_words * len(parent_chunks)),
             len(parent_chunks) - 1,
         )
         child_to_parent.append(parent_idx)
-        child_words_seen += child_word_count
+        child_words_seen += len(child.split())
 
-    # Embed all child chunks at once (batched)
     embeddings = model.encode(child_chunks, show_progress_bar=False).tolist()
 
-    ids = [str(uuid.uuid4()) for _ in child_chunks]
-    metadatas = [
-        {
-            "child_index": i,
-            "parent_text": parent_chunks[child_to_parent[i]],
-            "filename": filename,
-        }
-        for i in range(len(child_chunks))
-    ]
-
     collection.add(
-        ids=ids,
+        ids=[str(uuid.uuid4()) for _ in child_chunks],
         embeddings=embeddings,
         documents=child_chunks,
-        metadatas=metadatas,
+        metadatas=[
+            {
+                "child_index": i,
+                "parent_text": parent_chunks[child_to_parent[i]],
+                "filename": filename,
+            }
+            for i in range(len(child_chunks))
+        ],
     )
-
-    # Note: PersistentClient in chromadb 0.6.x auto-persists — no manual persist() needed.
+    # PersistentClient auto-persists in chromadb 0.6.x — no manual persist() needed
 
     return {
         "doc_id": doc_id,
@@ -143,11 +128,6 @@ def index_document(text: str, filename: str) -> Dict:
 # ── Retrieval ─────────────────────────────────────────────────────────────────
 
 def retrieve_chunks(query: str, doc_id: str, top_k: int = 6) -> List[str]:
-    """
-    Embed the query, retrieve top-k child chunks by cosine similarity,
-    return the corresponding PARENT chunks (for richer LLM context).
-    Deduplicates parents so the same section isn't sent twice.
-    """
     client = get_chroma_client()
     model = get_embed_model()
 
@@ -164,20 +144,15 @@ def retrieve_chunks(query: str, doc_id: str, top_k: int = 6) -> List[str]:
         include=["metadatas", "distances"],
     )
 
-    # Deduplicate parent chunks preserving retrieval order
-    seen_parents: set = set()
-    parent_chunks: List[str] = []
+    seen, parent_chunks = set(), []
     for meta in results["metadatas"][0]:
-        parent_text = meta["parent_text"]
-        key = parent_text[:80]  # fingerprint
-        if key not in seen_parents:
-            seen_parents.add(key)
-            parent_chunks.append(parent_text)
+        key = meta["parent_text"][:80]
+        if key not in seen:
+            seen.add(key)
+            parent_chunks.append(meta["parent_text"])
 
     return parent_chunks
 
 
 def list_documents() -> List[str]:
-    """Return names of all indexed collections (document IDs)."""
-    client = get_chroma_client()
-    return [c.name for c in client.list_collections()]
+    return [c.name for c in get_chroma_client().list_collections()]
