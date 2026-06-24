@@ -1,11 +1,6 @@
 """
-RAG Document Retrieval API
-FastAPI app:
-  GET  /          — HTML frontend
-  POST /upload    — parse + index a document
-  POST /query     — retrieve + generate answer
-  GET  /health    — health check
-  GET  /documents — list indexed documents
+RAG Document Retrieval API — flat structure version
+All files are in the root directory (no app/ subfolder)
 """
 
 import os
@@ -15,14 +10,15 @@ from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 from typing import Literal
 from dotenv import load_dotenv
 
 load_dotenv()
 
+# Flat imports — no app. prefix
 from doc_parser import extract_text
 from rag import index_document, retrieve_chunks, doc_id_from_filename, list_documents
 from llm import generate_answer
@@ -31,10 +27,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 REQUIRED_ENV_VARS = ["GROQ_API_KEY"]
-STATIC_DIR = Path(__file__).parent / "static"
+STATIC_DIR = Path(__file__).parent  # index.html is in root
 
-
-# ── Startup validation ────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -42,15 +36,11 @@ async def lifespan(app: FastAPI):
     if missing:
         raise RuntimeError(
             f"Missing required environment variables: {', '.join(missing)}\n"
-            f"  Local dev: add them to your .env file\n"
-            f"  Render:    Dashboard → Environment → Add variable"
+            f"  Render: Dashboard → Environment → Add variable"
         )
     logger.info("All required environment variables present. Starting server.")
     yield
-    logger.info("Server shutting down.")
 
-
-# ── App setup ─────────────────────────────────────────────────────────────────
 
 app = FastAPI(
     lifespan=lifespan,
@@ -66,12 +56,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Serve static files (HTML frontend)
-if STATIC_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-
-# ── Schemas ───────────────────────────────────────────────────────────────────
 
 class QueryRequest(BaseModel):
     filename: str
@@ -102,15 +86,12 @@ class QueryResponse(BaseModel):
     answer: str
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
-
 @app.get("/", include_in_schema=False)
 def root():
-    """Serve the HTML frontend."""
     index = STATIC_DIR / "index.html"
     if index.exists():
         return FileResponse(str(index))
-    return {"message": "RAG API is running. Visit /docs for the API reference."}
+    return {"message": "RAG API running. Visit /docs"}
 
 
 @app.get("/health")
@@ -142,7 +123,7 @@ async def upload_document(file: UploadFile = File(...)):
         raise HTTPException(422, detail=str(e))
 
     if len(text.strip()) < 50:
-        raise HTTPException(422, detail="Extracted text too short. Check the document has readable content.")
+        raise HTTPException(422, detail="Extracted text too short.")
 
     result = index_document(text, filename)
 
