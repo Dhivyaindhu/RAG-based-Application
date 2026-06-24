@@ -1,5 +1,5 @@
 """
-LLM module — Groq (Llama 3) as the reader + writer.
+LLM module — Groq as the reader + writer.
 Mode-based prompt templates control what the LLM produces from retrieved chunks.
 """
 
@@ -9,7 +9,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ── Groq client ───────────────────────────────────────────────────────────────
 _groq_client: Groq | None = None
 
 
@@ -18,19 +17,17 @@ def get_groq_client() -> Groq:
     if _groq_client is None:
         api_key = os.getenv("GROQ_API_KEY")
         if not api_key:
-            raise EnvironmentError(
-                "GROQ_API_KEY not set. Add it to your .env file."
-            )
+            raise EnvironmentError("GROQ_API_KEY not set. Add it to your .env file.")
         _groq_client = Groq(api_key=api_key)
     return _groq_client
 
 
 # ── Model config ──────────────────────────────────────────────────────────────
-GROQ_MODEL = "llama3-70b-8192"  # Best quality on free tier
+GROQ_MODEL = "llama-3.1-8b-instant"  # Updated — llama3-70b-8192 was decommissioned
 MAX_TOKENS = 2048
 
 
-# ── Prompt templates per output mode ─────────────────────────────────────────
+# ── Prompt templates ──────────────────────────────────────────────────────────
 
 SYSTEM_PROMPTS = {
     "summary": (
@@ -87,39 +84,16 @@ USER_PROMPT_TEMPLATES = {
 }
 
 
-# ── Main generate function ────────────────────────────────────────────────────
-
-def generate_answer(
-    chunks: list[str],
-    mode: str,
-    question: str = "",
-) -> str:
-    """
-    Send retrieved chunks to Groq LLM and generate an answer.
-
-    Args:
-        chunks: Retrieved document chunks (from RAG pipeline)
-        mode: One of 'summary', 'outline', 'full', 'qa'
-        question: Required when mode == 'qa'
-
-    Returns:
-        LLM-generated text response
-    """
+def generate_answer(chunks: list[str], mode: str, question: str = "") -> str:
     if mode not in SYSTEM_PROMPTS:
         raise ValueError(f"Invalid mode '{mode}'. Choose: summary, outline, full, qa")
-
     if mode == "qa" and not question.strip():
         raise ValueError("mode='qa' requires a non-empty question.")
 
     context = "\n\n---\n\n".join(chunks)
-
-    user_prompt = USER_PROMPT_TEMPLATES[mode].format(
-        context=context,
-        question=question,
-    )
+    user_prompt = USER_PROMPT_TEMPLATES[mode].format(context=context, question=question)
 
     client = get_groq_client()
-
     response = client.chat.completions.create(
         model=GROQ_MODEL,
         max_tokens=MAX_TOKENS,
@@ -127,7 +101,6 @@ def generate_answer(
             {"role": "system", "content": SYSTEM_PROMPTS[mode]},
             {"role": "user", "content": user_prompt},
         ],
-        temperature=0.2,  # Low temperature → factual, consistent output
+        temperature=0.2,
     )
-
     return response.choices[0].message.content.strip()
