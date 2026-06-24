@@ -3,9 +3,8 @@ services:
     name: rag-doc-api
     env: python
     plan: free
-    rootDir: .
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1
     envVars:
       - key: GROQ_API_KEY
         sync: false
