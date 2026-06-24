@@ -1,35 +1,40 @@
 """
 RAG Document Retrieval API
-FastAPI app with three endpoints:
-  POST /upload   — parse + index a document
-  POST /query    — retrieve + generate answer
-  GET  /health   — health check
+FastAPI app:
+  GET  /          — HTML frontend
+  POST /upload    — parse + index a document
+  POST /query     — retrieve + generate answer
+  GET  /health    — health check
+  GET  /documents — list indexed documents
 """
 
 import os
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, field_validator
 from typing import Literal
 from dotenv import load_dotenv
 
-load_dotenv()  # loads .env locally; no effect when platform injects env vars
+load_dotenv()
 
-# ── Fixed imports (no app/ folder — all files are at root) ───────────────────
-from doc_parser import extract_text
-from rag import index_document, retrieve_chunks, doc_id_from_filename, list_documents
-from llm import generate_answer
+from app.parser import extract_text
+from app.rag import index_document, retrieve_chunks, doc_id_from_filename, list_documents
+from app.llm import generate_answer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
-# ── Startup validation — fail fast if secrets are missing ─────────────────────
-
 REQUIRED_ENV_VARS = ["GROQ_API_KEY"]
+STATIC_DIR = Path(__file__).parent / "static"
+
+
+# ── Startup validation ────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -38,8 +43,7 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(
             f"Missing required environment variables: {', '.join(missing)}\n"
             f"  Local dev: add them to your .env file\n"
-            f"  Render:    Dashboard → Environment → Add variable\n"
-            f"  Railway:   Dashboard → Variables → Add variable"
+            f"  Render:    Dashboard → Environment → Add variable"
         )
     logger.info("All required environment variables present. Starting server.")
     yield
@@ -51,19 +55,20 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     lifespan=lifespan,
     title="RAG Document Retrieval API",
-    description=(
-        "Upload PDF / DOCX / TXT documents and query them using "
-        "Retrieval-Augmented Generation with Groq (Llama 3)."
-    ),
+    description="Upload PDF / DOCX / TXT and query with Groq Llama 3.",
     version="1.0.0",
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Tighten this in production
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Serve static files (HTML frontend)
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -97,7 +102,16 @@ class QueryResponse(BaseModel):
     answer: str
 
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+@app.get("/", include_in_schema=False)
+def root():
+    """Serve the HTML frontend."""
+    index = STATIC_DIR / "index.html"
+    if index.exists():
+        return FileResponse(str(index))
+    return {"message": "RAG API is running. Visit /docs for the API reference."}
+
 
 @app.get("/health")
 def health():
@@ -106,40 +120,29 @@ def health():
 
 @app.get("/documents")
 def get_documents():
-    """List all indexed document IDs."""
     return {"documents": list_documents()}
 
 
 @app.post("/upload", response_model=UploadResponse)
 async def upload_document(file: UploadFile = File(...)):
-    """
-    Upload and index a document (PDF, DOCX, or TXT).
-    The document is parsed, chunked, embedded, and stored in ChromaDB.
-    """
     allowed = {".pdf", ".docx", ".txt"}
     filename = file.filename or "upload"
-    ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    ext = ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
 
     if ext not in allowed:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file type '{ext}'. Upload PDF, DOCX, or TXT.",
-        )
+        raise HTTPException(400, detail=f"Unsupported file type '{ext}'. Use PDF, DOCX, or TXT.")
 
     file_bytes = await file.read()
-    if len(file_bytes) > 20 * 1024 * 1024:  # 20 MB limit
-        raise HTTPException(status_code=413, detail="File too large. Max size is 20 MB.")
+    if len(file_bytes) > 20 * 1024 * 1024:
+        raise HTTPException(413, detail="File too large. Max 20 MB.")
 
     try:
         text = extract_text(file_bytes, filename)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(422, detail=str(e))
 
     if len(text.strip()) < 50:
-        raise HTTPException(
-            status_code=422,
-            detail="Extracted text is too short. Check that the document has readable content.",
-        )
+        raise HTTPException(422, detail="Extracted text too short. Check the document has readable content.")
 
     result = index_document(text, filename)
 
@@ -154,21 +157,10 @@ async def upload_document(file: UploadFile = File(...)):
 
 @app.post("/query", response_model=QueryResponse)
 async def query_document(body: QueryRequest):
-    """
-    Query an indexed document.
-
-    Modes:
-    - summary  → concise 3-5 sentence summary
-    - outline  → structured bullet-point outline
-    - full     → all key details in structured format
-    - qa       → answer a specific question (requires 'question' field)
-    """
     doc_id = doc_id_from_filename(body.filename)
 
-    # For full/summary/outline mode, use a descriptive query to retrieve broad content
     retrieval_query = (
-        body.question
-        if body.mode == "qa"
+        body.question if body.mode == "qa"
         else "Main topics, key points, and important details of the document"
     )
 
@@ -179,21 +171,17 @@ async def query_document(body: QueryRequest):
             top_k=8 if body.mode == "full" else 5,
         )
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(404, detail=str(e))
 
     if not chunks:
-        raise HTTPException(status_code=404, detail="No relevant content found in document.")
+        raise HTTPException(404, detail="No relevant content found.")
 
     try:
-        answer = generate_answer(
-            chunks=chunks,
-            mode=body.mode,
-            question=body.question,
-        )
+        answer = generate_answer(chunks=chunks, mode=body.mode, question=body.question)
     except EnvironmentError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(500, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"LLM error: {str(e)}")
+        raise HTTPException(500, detail=f"LLM error: {str(e)}")
 
     return QueryResponse(
         filename=body.filename,
