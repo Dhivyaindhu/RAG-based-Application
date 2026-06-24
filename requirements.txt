@@ -2,13 +2,14 @@ fastapi
 uvicorn[standard]
 python-multipart
 groq
-chromadb==0.5.23
-numpy<2.0.0
+chromadb==0.6.3
+numpy>=1.26.4,<2.0.0
 pymupdf
 python-docx
 tiktoken
 python-dotenv
 pydantic>=2.9.0
+tokenizers>=0.21.0
 
 # CPU-only torch — avoids 532MB GPU version
 --extra-index-url https://download.pytorch.org/whl/cpu
