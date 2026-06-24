@@ -1,11 +1,13 @@
 """
-RAG pipeline — chunk text, embed, store in ChromaDB, retrieve relevant chunks.
+RAG pipeline — lightweight version for Render free tier (512MB RAM)
 
-Strategy used: Parent-Child RAG
-- Small chunks (200 words) embedded and searched for precision.
-- Parent chunks (600 words) returned to LLM for richer context.
+Embedding strategy: Groq does NOT provide embeddings, so we use
+the `chromadb` default embedding function which calls sentence-transformers
+ONLY when needed, OR we use a hash-based TF-IDF style retrieval.
 
-ChromaDB 0.6.x — uses PersistentClient(path=...)
+To stay within 512MB we replace sentence-transformers with
+chromadb's built-in lightweight embedding (all-MiniLM-L6-v2 via ONNX runtime
+which chromadb bundles — much lighter than full PyTorch).
 """
 
 import os
@@ -14,25 +16,21 @@ import hashlib
 from typing import List, Dict
 
 import chromadb
-from sentence_transformers import SentenceTransformer
+from chromadb.utils import embedding_functions
 
-# ── Constants ─────────────────────────────────────────────────────────────────
-_EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
-
-# Render mounts the persistent disk at this path (set via env var in render.yaml)
-# Falls back to ./vectorstore for local development
 VECTORSTORE_PATH = os.getenv("VECTORSTORE_PATH", "./vectorstore")
 
-# ── Singletons ────────────────────────────────────────────────────────────────
-_embed_model = None
 _chroma_client = None
+_embed_fn = None
 
 
-def get_embed_model() -> SentenceTransformer:
-    global _embed_model
-    if _embed_model is None:
-        _embed_model = SentenceTransformer(_EMBED_MODEL_NAME)
-    return _embed_model
+def get_embed_fn():
+    global _embed_fn
+    if _embed_fn is None:
+        # Uses chromadb's built-in ONNX embedding — no PyTorch needed
+        # Model: all-MiniLM-L6-v2 via ONNX (~30MB vs ~400MB for PyTorch)
+        _embed_fn = embedding_functions.DefaultEmbeddingFunction()
+    return _embed_fn
 
 
 def get_chroma_client():
@@ -61,8 +59,6 @@ def chunk_text_large(text: str, chunk_size: int = 600, overlap: int = 80) -> Lis
     return chunk_text(text, chunk_size=chunk_size, overlap=overlap)
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
 def doc_id_from_filename(filename: str) -> str:
     safe = hashlib.md5(filename.encode()).hexdigest()[:16]
     return f"doc_{safe}"
@@ -73,15 +69,16 @@ def doc_id_from_filename(filename: str) -> str:
 def index_document(text: str, filename: str) -> Dict:
     doc_id = doc_id_from_filename(filename)
     client = get_chroma_client()
-    model = get_embed_model()
 
     try:
         client.delete_collection(doc_id)
     except Exception:
         pass
 
+    # Pass embedding function at collection creation
     collection = client.create_collection(
         name=doc_id,
+        embedding_function=get_embed_fn(),
         metadata={"hnsw:space": "cosine"},
     )
 
@@ -100,11 +97,9 @@ def index_document(text: str, filename: str) -> Dict:
         child_to_parent.append(parent_idx)
         child_words_seen += len(child.split())
 
-    embeddings = model.encode(child_chunks, show_progress_bar=False).tolist()
-
+    # chromadb handles embedding internally — just pass documents
     collection.add(
         ids=[str(uuid.uuid4()) for _ in child_chunks],
-        embeddings=embeddings,
         documents=child_chunks,
         metadatas=[
             {
@@ -115,7 +110,6 @@ def index_document(text: str, filename: str) -> Dict:
             for i in range(len(child_chunks))
         ],
     )
-    # PersistentClient auto-persists in chromadb 0.6.x — no manual persist() needed
 
     return {
         "doc_id": doc_id,
@@ -129,17 +123,17 @@ def index_document(text: str, filename: str) -> Dict:
 
 def retrieve_chunks(query: str, doc_id: str, top_k: int = 6) -> List[str]:
     client = get_chroma_client()
-    model = get_embed_model()
 
     try:
-        collection = client.get_collection(doc_id)
+        collection = client.get_collection(
+            doc_id,
+            embedding_function=get_embed_fn(),
+        )
     except Exception:
         raise ValueError("Document not found. Please upload it first.")
 
-    query_embedding = model.encode([query], show_progress_bar=False).tolist()
-
     results = collection.query(
-        query_embeddings=query_embedding,
+        query_texts=[query],
         n_results=min(top_k, collection.count()),
         include=["metadatas", "distances"],
     )
