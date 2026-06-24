@@ -23,9 +23,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from app.parser import extract_text
-from app.rag import index_document, retrieve_chunks, doc_id_from_filename, list_documents
-from app.llm import generate_answer
+from doc_parser import extract_text
+from rag import index_document, retrieve_chunks, doc_id_from_filename, list_documents
+from llm import generate_answer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
