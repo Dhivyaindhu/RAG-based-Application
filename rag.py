@@ -4,6 +4,8 @@ RAG pipeline — chunk text, embed, store in ChromaDB, retrieve relevant chunks.
 Strategy used: Parent-Child RAG
 - Small chunks (200 tokens) are embedded and searched for precision.
 - Parent chunks (600 tokens) are returned to the LLM for richer context.
+
+ChromaDB version: 0.5.23 (pinned for Render free tier compatibility)
 """
 
 import uuid
@@ -14,9 +16,9 @@ import chromadb
 from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 
-# ── Embedding model (runs locally, no API key needed) ──────────────────────
+# ── Embedding model (runs locally, no API key needed) ───────────────────────
 _EMBED_MODEL_NAME = "all-MiniLM-L6-v2"  # 80MB, fast, good quality
-_embed_model: SentenceTransformer | None = None
+_embed_model = None
 
 
 def get_embed_model() -> SentenceTransformer:
@@ -26,21 +28,27 @@ def get_embed_model() -> SentenceTransformer:
     return _embed_model
 
 
-# ── ChromaDB client (persists to disk) ─────────────────────────────────────
-_chroma_client: chromadb.PersistentClient | None = None
+# ── ChromaDB client — 0.5.x API (persists to disk via duckdb+parquet) ───────
+# chromadb 0.5.x uses chromadb.Client(Settings(...)) for persistence.
+# chromadb 1.x changed to PersistentClient() — do NOT upgrade without
+# also rewriting this section.
+_chroma_client = None
 
 
-def get_chroma_client() -> chromadb.PersistentClient:
+def get_chroma_client():
     global _chroma_client
     if _chroma_client is None:
-        _chroma_client = chromadb.PersistentClient(
-            path="./vectorstore",
-            settings=Settings(anonymized_telemetry=False),
+        _chroma_client = chromadb.Client(
+            Settings(
+                chroma_db_impl="duckdb+parquet",
+                persist_directory="./vectorstore",
+                anonymized_telemetry=False,
+            )
         )
     return _chroma_client
 
 
-# ── Chunking ────────────────────────────────────────────────────────────────
+# ── Chunking ─────────────────────────────────────────────────────────────────
 
 def chunk_text(text: str, chunk_size: int = 200, overlap: int = 40) -> List[str]:
     """
@@ -65,7 +73,7 @@ def chunk_text_large(text: str, chunk_size: int = 600, overlap: int = 80) -> Lis
     return chunk_text(text, chunk_size=chunk_size, overlap=overlap)
 
 
-# ── Indexing ─────────────────────────────────────────────────────────────────
+# ── Indexing ──────────────────────────────────────────────────────────────────
 
 def doc_id_from_filename(filename: str) -> str:
     """Stable collection name derived from filename (ChromaDB safe)."""
@@ -76,7 +84,7 @@ def doc_id_from_filename(filename: str) -> str:
 def index_document(text: str, filename: str) -> Dict:
     """
     Chunk, embed, and store a document in ChromaDB.
-    Returns metadata: doc_id, chunk_count, parent_chunk_count.
+    Returns metadata: doc_id, child_chunks, parent_chunks.
 
     Parent-Child strategy:
     - child_chunks: small, precise → embedded and stored in Chroma
@@ -105,7 +113,6 @@ def index_document(text: str, filename: str) -> Dict:
     child_words_seen = 0
     for i, child in enumerate(child_chunks):
         child_word_count = len(child.split())
-        # Rough parent index based on word position
         parent_idx = min(
             int(child_words_seen / max(len(text.split()), 1) * len(parent_chunks)),
             len(parent_chunks) - 1,
@@ -133,6 +140,9 @@ def index_document(text: str, filename: str) -> Dict:
         metadatas=metadatas,
     )
 
+    # Persist to disk (required in chromadb 0.5.x)
+    client.persist()
+
     return {
         "doc_id": doc_id,
         "child_chunks": len(child_chunks),
@@ -155,7 +165,7 @@ def retrieve_chunks(query: str, doc_id: str, top_k: int = 6) -> List[str]:
     try:
         collection = client.get_collection(doc_id)
     except Exception:
-        raise ValueError(f"Document not found. Please upload it first.")
+        raise ValueError("Document not found. Please upload it first.")
 
     query_embedding = model.encode([query], show_progress_bar=False).tolist()
 
