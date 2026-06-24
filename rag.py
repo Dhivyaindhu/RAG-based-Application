@@ -5,7 +5,7 @@ Strategy used: Parent-Child RAG
 - Small chunks (200 tokens) are embedded and searched for precision.
 - Parent chunks (600 tokens) are returned to the LLM for richer context.
 
-ChromaDB version: 0.5.23 (pinned for Render free tier compatibility)
+ChromaDB version: 0.6.x (uses PersistentClient)
 """
 
 import uuid
@@ -13,7 +13,6 @@ import hashlib
 from typing import List, Dict
 
 import chromadb
-from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 
 # ── Embedding model (runs locally, no API key needed) ───────────────────────
@@ -28,23 +27,14 @@ def get_embed_model() -> SentenceTransformer:
     return _embed_model
 
 
-# ── ChromaDB client — 0.5.x API (persists to disk via duckdb+parquet) ───────
-# chromadb 0.5.x uses chromadb.Client(Settings(...)) for persistence.
-# chromadb 1.x changed to PersistentClient() — do NOT upgrade without
-# also rewriting this section.
+# ── ChromaDB client — 0.6.x API ──────────────────────────────────────────────
 _chroma_client = None
 
 
 def get_chroma_client():
     global _chroma_client
     if _chroma_client is None:
-        _chroma_client = chromadb.Client(
-            Settings(
-                chroma_db_impl="duckdb+parquet",
-                persist_directory="./vectorstore",
-                anonymized_telemetry=False,
-            )
-        )
+        _chroma_client = chromadb.PersistentClient(path="./vectorstore")
     return _chroma_client
 
 
@@ -140,8 +130,7 @@ def index_document(text: str, filename: str) -> Dict:
         metadatas=metadatas,
     )
 
-    # Persist to disk (required in chromadb 0.5.x)
-    client.persist()
+    # Note: PersistentClient in chromadb 0.6.x auto-persists — no manual persist() needed.
 
     return {
         "doc_id": doc_id,
