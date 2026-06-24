@@ -1,16 +1,10 @@
-# Versions unpinned — let pip resolve compatible set on Render.
-# chromadb is the ONLY exception: pin to 0.5.x because 1.x has
-# breaking API changes that require a different client setup.
-
 fastapi
 uvicorn[standard]
 python-multipart
 groq
 chromadb>=0.5.1,<1.0.0
-sentence-transformers
 pymupdf
 python-docx
-tiktoken
 python-dotenv
 pydantic>=2.9.0
-aiofile
+aiofiles
