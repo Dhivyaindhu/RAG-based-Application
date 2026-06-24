@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>RAG Document Retrieval</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #0f0f1a;
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+
+    header {
+      background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);
+      padding: 24px 32px;
+      border-bottom: 1px solid #4c1d95;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    header .logo {
+      width: 40px; height: 40px;
+      background: linear-gradient(135deg, #7c3aed, #4f46e5);
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px;
+    }
+    header h1 { font-size: 22px; font-weight: 700; color: #fff; }
+    header p  { font-size: 13px; color: #a5b4fc; margin-top: 2px; }
+
+    .container {
+      max-width: 860px;
+      margin: 40px auto;
+      padding: 0 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .card {
+      background: #1e1b2e;
+      border: 1px solid #2d2b52;
+      border-radius: 16px;
+      padding: 28px;
+    }
+    .card-title {
+      font-size: 14px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: #a78bfa;
+      margin-bottom: 18px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Upload zone */
+    .upload-zone {
+      border: 2px dashed #4c1d95;
+      border-radius: 12px;
+      padding: 40px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: all .2s;
+      background: #13111f;
+    }
+    .upload-zone:hover, .upload-zone.drag { border-color: #7c3aed; background: #1a1730; }
+    .upload-zone .icon { font-size: 36px; margin-bottom: 10px; }
+    .upload-zone p { color: #94a3b8; font-size: 14px; }
+    .upload-zone strong { color: #c4b5fd; }
+    #fileInput { display: none; }
+    .file-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: #2e1065;
+      border: 1px solid #6d28d9;
+      border-radius: 8px;
+      padding: 8px 14px;
+      font-size: 13px;
+      color: #ddd6fe;
+      margin-top: 14px;
+    }
+
+    /* Mode selector */
+    .modes {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+    .mode-btn {
+      border: 1.5px solid #2d2b52;
+      border-radius: 10px;
+      padding: 16px;
+      cursor: pointer;
+      background: #13111f;
+      transition: all .2s;
+      text-align: left;
+    }
+    .mode-btn:hover { border-color: #7c3aed; }
+    .mode-btn.active {
+      border-color: #7c3aed;
+      background: #1e1040;
+    }
+    .mode-btn .mode-icon { font-size: 22px; margin-bottom: 6px; }
+    .mode-btn .mode-name { font-weight: 700; font-size: 14px; color: #e2e8f0; }
+    .mode-btn .mode-desc { font-size: 12px; color: #64748b; margin-top: 3px; }
+
+    /* Question input */
+    #questionWrap { display: none; margin-top: 16px; }
+    #questionInput {
+      width: 100%;
+      background: #13111f;
+      border: 1.5px solid #2d2b52;
+      border-radius: 10px;
+      padding: 12px 16px;
+      color: #e2e8f0;
+      font-size: 14px;
+      outline: none;
+      transition: border .2s;
+    }
+    #questionInput:focus { border-color: #7c3aed; }
+    #questionInput::placeholder { color: #475569; }
+
+    /* Button */
+    .btn {
+      width: 100%;
+      padding: 14px;
+      border-radius: 10px;
+      border: none;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all .2s;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #7c3aed, #4f46e5);
+      color: #fff;
+    }
+    .btn-primary:hover { opacity: .9; transform: translateY(-1px); }
+    .btn-primary:disabled {
+      opacity: .4;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    /* Status */
+    .status {
+      font-size: 13px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      margin-top: 14px;
+      display: none;
+    }
+    .status.info  { background: #1e3a5f; color: #93c5fd; border: 1px solid #1d4ed8; display: block; }
+    .status.ok    { background: #14532d; color: #86efac; border: 1px solid #16a34a; display: block; }
+    .status.error { background: #450a0a; color: #fca5a5; border: 1px solid #dc2626; display: block; }
+
+    /* Answer box */
+    #answerCard { display: none; }
+    .answer-meta {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+    .tag {
+      background: #2e1065;
+      border: 1px solid #6d28d9;
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 12px;
+      color: #c4b5fd;
+    }
+    #answerText {
+      background: #13111f;
+      border: 1px solid #2d2b52;
+      border-radius: 10px;
+      padding: 20px;
+      font-size: 14px;
+      line-height: 1.8;
+      color: #cbd5e1;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 520px;
+      overflow-y: auto;
+    }
+    .copy-btn {
+      margin-top: 12px;
+      background: #2d2b52;
+      border: 1px solid #4c1d95;
+      border-radius: 8px;
+      color: #a78bfa;
+      padding: 8px 16px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: background .2s;
+    }
+    .copy-btn:hover { background: #3b3770; }
+
+    /* Spinner */
+    .spinner {
+      display: inline-block;
+      width: 16px; height: 16px;
+      border: 2px solid rgba(255,255,255,.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    @media(max-width:560px) {
+      .modes { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">🧠</div>
+  <div>
+    <h1>RAG Document Retrieval</h1>
+    <p>Upload any document · Get summary, outline, full detail, or Q&amp;A answers</p>
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- Step 1: Upload -->
+  <div class="card">
+    <div class="card-title">📄 Step 1 — Upload Document</div>
+    <div class="upload-zone" id="uploadZone">
+      <div class="icon">☁️</div>
+      <p><strong>Click to upload</strong> or drag &amp; drop</p>
+      <p style="margin-top:6px">PDF · DOCX · TXT &nbsp;·&nbsp; Max 20 MB</p>
+    </div>
+    <input type="file" id="fileInput" accept=".pdf,.docx,.txt"/>
+    <div id="fileBadge" style="display:none">
+      <span class="file-badge">📎 <span id="fileName"></span></span>
+    </div>
+    <div class="status" id="uploadStatus"></div>
+  </div>
+
+  <!-- Step 2: Mode -->
+  <div class="card">
+    <div class="card-title">⚙️ Step 2 — Choose Output Mode</div>
+    <div class="modes">
+      <div class="mode-btn active" data-mode="summary">
+        <div class="mode-icon">📝</div>
+        <div class="mode-name">Summary</div>
+        <div class="mode-desc">Concise 3–5 sentence overview</div>
+      </div>
+      <div class="mode-btn" data-mode="outline">
+        <div class="mode-icon">📋</div>
+        <div class="mode-name">Outline</div>
+        <div class="mode-desc">Structured bullet-point outline</div>
+      </div>
+      <div class="mode-btn" data-mode="full">
+        <div class="mode-icon">📖</div>
+        <div class="mode-name">Full Detail</div>
+        <div class="mode-desc">All key details, well structured</div>
+      </div>
+      <div class="mode-btn" data-mode="qa">
+        <div class="mode-icon">💬</div>
+        <div class="mode-name">Q&amp;A</div>
+        <div class="mode-desc">Ask any question about the doc</div>
+      </div>
+    </div>
+    <div id="questionWrap">
+      <input type="text" id="questionInput" placeholder="Type your question about the document…"/>
+    </div>
+  </div>
+
+  <!-- Step 3: Generate -->
+  <div class="card">
+    <div class="card-title">🚀 Step 3 — Generate Answer</div>
+    <button class="btn btn-primary" id="generateBtn" disabled>
+      Upload a document first
+    </button>
+    <div class="status" id="queryStatus"></div>
+  </div>
+
+  <!-- Answer -->
+  <div class="card" id="answerCard">
+    <div class="card-title">✨ Answer</div>
+    <div class="answer-meta" id="answerMeta"></div>
+    <div id="answerText"></div>
+    <button class="copy-btn" onclick="copyAnswer()">📋 Copy answer</button>
+  </div>
+
+</div>
+
+<script>
+  const BASE = '';  // same origin — API and frontend on same server
+
+  let uploadedFilename = null;
+  let selectedMode = 'summary';
+
+  // ── Upload zone ────────────────────────────────────────────────────────────
+  const zone = document.getElementById('uploadZone');
+  const fileInput = document.getElementById('fileInput');
+
+  zone.addEventListener('click', () => fileInput.click());
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('drag'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault();
+    zone.classList.remove('drag');
+    if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+  });
+  fileInput.addEventListener('change', () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); });
+
+  async function handleFile(file) {
+    setStatus('uploadStatus', 'info', `⏳ Uploading and indexing "${file.name}"…`);
+    document.getElementById('generateBtn').disabled = true;
+    document.getElementById('generateBtn').textContent = 'Upload a document first';
+    uploadedFilename = null;
+
+    const form = new FormData();
+    form.append('file', file);
+
+    try {
+      const res = await fetch(`${BASE}/upload`, { method: 'POST', body: form });
+      const data = await res.json();
+
+      if (!res.ok) throw new Error(data.detail || 'Upload failed');
+
+      uploadedFilename = data.filename;
+      document.getElementById('fileBadge').style.display = 'block';
+      document.getElementById('fileName').textContent = `${data.filename} · ${data.child_chunks} chunks indexed`;
+      setStatus('uploadStatus', 'ok', `✅ Indexed into ${data.child_chunks} searchable chunks (${data.parent_chunks} context windows)`);
+      document.getElementById('generateBtn').disabled = false;
+      document.getElementById('generateBtn').textContent = '✨ Generate Answer';
+    } catch (err) {
+      setStatus('uploadStatus', 'error', `❌ ${err.message}`);
+    }
+  }
+
+  // ── Mode selection ─────────────────────────────────────────────────────────
+  document.querySelectorAll('.mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      selectedMode = btn.dataset.mode;
+      document.getElementById('questionWrap').style.display =
+        selectedMode === 'qa' ? 'block' : 'none';
+    });
+  });
+
+  // ── Generate ───────────────────────────────────────────────────────────────
+  document.getElementById('generateBtn').addEventListener('click', async () => {
+    if (!uploadedFilename) return;
+
+    const question = document.getElementById('questionInput').value.trim();
+    if (selectedMode === 'qa' && !question) {
+      setStatus('queryStatus', 'error', '❌ Please type a question for Q&A mode.');
+      return;
+    }
+
+    const btn = document.getElementById('generateBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Retrieving & generating…';
+    setStatus('queryStatus', 'info', '⏳ Searching document and generating answer with Groq Llama 3…');
+    document.getElementById('answerCard').style.display = 'none';
+
+    try {
+      const res = await fetch(`${BASE}/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: uploadedFilename,
+          mode: selectedMode,
+          question: question,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Query failed');
+
+      showAnswer(data);
+      setStatus('queryStatus', 'ok', `✅ Done — ${data.chunks_retrieved} context chunks used`);
+    } catch (err) {
+      setStatus('queryStatus', 'error', `❌ ${err.message}`);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '✨ Generate Answer';
+    }
+  });
+
+  function showAnswer(data) {
+    const modeLabels = { summary: '📝 Summary', outline: '📋 Outline', full: '📖 Full Detail', qa: '💬 Q&A' };
+    document.getElementById('answerMeta').innerHTML = `
+      <span class="tag">${modeLabels[data.mode]}</span>
+      <span class="tag">📎 ${data.filename}</span>
+      ${data.question ? `<span class="tag">❓ ${data.question}</span>` : ''}
+      <span class="tag">🔍 ${data.chunks_retrieved} chunks</span>
+    `;
+    document.getElementById('answerText').textContent = data.answer;
+    document.getElementById('answerCard').style.display = 'block';
+    document.getElementById('answerCard').scrollIntoView({ behavior: 'smooth' });
+  }
+
+  function copyAnswer() {
+    const text = document.getElementById('answerText').textContent;
+    navigator.clipboard.writeText(text).then(() => {
+      const btn = document.querySelector('.copy-btn');
+      btn.textContent = '✅ Copied!';
+      setTimeout(() => btn.textContent = '📋 Copy answer', 2000);
+    });
+  }
+
+  function setStatus(id, type, msg) {
+    const el = document.getElementById(id);
+    el.className = `status ${type}`;
+    el.textContent = msg;
+  }
+</script>
+</body>
+</html>
