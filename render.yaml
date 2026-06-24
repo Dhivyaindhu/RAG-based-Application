@@ -3,11 +3,14 @@ services:
     name: rag-doc-api
     env: python
     plan: free
+    rootDir: .
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: GROQ_API_KEY
-        sync: false       # Set this manually in Render dashboard
+        sync: false
+      - key: VECTORSTORE_PATH
+        value: /opt/render/project/src/vectorstore
     disk:
       name: vectorstore
       mountPath: /opt/render/project/src/vectorstore
