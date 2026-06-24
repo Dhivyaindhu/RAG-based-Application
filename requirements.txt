@@ -3,9 +3,14 @@ uvicorn[standard]
 python-multipart
 groq
 chromadb>=0.5.1,<1.0.0
-sentence-transformers
 pymupdf
 python-docx
 tiktoken
 python-dotenv
 pydantic>=2.9.0
+
+# CPU-only torch — avoids downloading 532MB GPU version on Render free tier
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+torchvision
+sentence-transformers
